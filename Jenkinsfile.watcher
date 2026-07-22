@@ -1,0 +1,106 @@
+/* groovylint-disable LineLength */
+
+@Library('shatteredsilicon') _
+
+pipeline {
+  agent {
+    label 'rpm-x86_64'
+  }
+
+  triggers {
+    cron('H H * * *')
+  }
+
+  environment {
+    CLOUDFLARED_BUILD_JOB = 'cloudflared/build-cloudflared-rpm'
+    RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID = 'rpm-package-server-target'
+    SLACK_WEBHOOK_CREDENTIALS_ID = 'slack-webhook-url'
+    SLACK_BOT_TOKEN_CREDENTIALS_ID = 'slack-bot-token'
+    SLACK_CHANNEL_ID_CREDENTIALS_ID = 'slack-channel-id'
+  }
+
+  options {
+    buildDiscarder(logRotator(
+      numToKeepStr: '5',
+      artifactNumToKeepStr: '5'
+    ))
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+    timestamps()
+  }
+
+  stages {
+    stage('Check latest release') {
+      steps {
+        script {
+          Map<String, String> externalConfiguration = [
+            CLOUDFLARED_BUILD_JOB: env.CLOUDFLARED_BUILD_JOB,
+            RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID: env.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
+            SLACK_WEBHOOK_CREDENTIALS_ID: env.SLACK_WEBHOOK_CREDENTIALS_ID,
+            SLACK_BOT_TOKEN_CREDENTIALS_ID: env.SLACK_BOT_TOKEN_CREDENTIALS_ID,
+            SLACK_CHANNEL_ID_CREDENTIALS_ID: env.SLACK_CHANNEL_ID_CREDENTIALS_ID
+          ]
+          ci.validateRequiredParameters(externalConfiguration, externalConfiguration.keySet())
+
+          org.shatteredsilicon.jenkins.model.RpmWatcherResult result = rpmWatcher(
+            pipelineName: 'Cloudflared RPM pipeline',
+            architecture: 'x86_64',
+            name: 'cloudflared',
+            supportedArches: ['x86_64'],
+            release: [
+              provider: 'github',
+              repository: 'cloudflare/cloudflared'
+            ],
+            repository: [
+              targetCredentialsId: externalConfiguration.RPM_PACKAGE_SERVER_TARGET_CREDENTIALS_ID,
+              remoteDirectory: 'pihole/x86_64/RPMS',
+              packageName: 'cloudflared',
+              architecture: 'x86_64'
+            ],
+            builds: [
+              [
+                job: externalConfiguration.CLOUDFLARED_BUILD_JOB,
+                versionParameter: 'VERSION',
+                threadParameter: 'THREAD_TS',
+                wait: false
+              ]
+            ],
+            notification: [
+              webhookCredentialsId: externalConfiguration.SLACK_WEBHOOK_CREDENTIALS_ID,
+              botTokenCredentialsId: externalConfiguration.SLACK_BOT_TOKEN_CREDENTIALS_ID,
+              channelIdCredentialsId: externalConfiguration.SLACK_CHANNEL_ID_CREDENTIALS_ID
+            ]
+          )
+
+          echo "cloudflared watcher result: rebuilds=${result.rebuilds.size()}, current=${result.current.size()}, skipped=${result.skipped.size()}, triggered=${result.triggeredBuilds.size()}"
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      script {
+        Map<String, String> slackCredentialIds = [
+          webhookCredentialsId: (env.SLACK_WEBHOOK_CREDENTIALS_ID ?: '').trim(),
+          botTokenCredentialsId: (env.SLACK_BOT_TOKEN_CREDENTIALS_ID ?: '').trim(),
+          channelIdCredentialsId: (env.SLACK_CHANNEL_ID_CREDENTIALS_ID ?: '').trim()
+        ]
+
+        if (slackCredentialIds.values().every { String value -> value }) {
+          slackNotify(
+            status: 'error',
+            message: "Cloudflared watcher failed. Check Jenkins build: ${env.BUILD_URL}",
+            pipelineName: 'Cloudflared RPM pipeline',
+            webhookCredentialsId: slackCredentialIds.webhookCredentialsId,
+            botTokenCredentialsId: slackCredentialIds.botTokenCredentialsId,
+            channelIdCredentialsId: slackCredentialIds.channelIdCredentialsId,
+            returnStdout: false
+          )
+        } else {
+          echo 'Slack failure notification skipped because credential IDs are not configured.'
+        }
+      }
+    }
+  }
+}
