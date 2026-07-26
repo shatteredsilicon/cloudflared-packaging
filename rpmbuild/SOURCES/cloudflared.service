@@ -1,0 +1,11 @@
+[Unit]
+Description=CloudFlare DNS over HTTPS Proxy
+Wants=network-online.target
+After=network.target network-online.target
+ 
+[Service]
+ExecStart=/usr/sbin/cloudflared proxy-dns --address 127.0.0.53 --port 53 --upstream https://1.1.1.2/.well-known/dns-query --upstream https://1.0.0.2/.well-known/dns-query
+Restart=on-abort
+ 
+[Install]
+WantedBy=multi-user.target
