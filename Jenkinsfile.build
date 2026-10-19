@@ -50,7 +50,7 @@ pipeline {
             arch: 'x86_64',
             supportedReleases: ['10'],
             supportedArches: ['x86_64'],
-            mockTarget: 'alma+epel-10-x86_64'
+            mockTarget: 'alma+epel+go-10-x86_64'
           )
 
           Map<String, String> externalConfiguration = [
@@ -81,7 +81,10 @@ pipeline {
           ci.validateBuildNode(
             expectedArchitecture: env.BASEARCH,
             requiredCommands: [
+              'cmp',
               'curl',
+              'go',
+              'gzip',
               'gpg',
               'jq',
               'mock',
@@ -91,7 +94,9 @@ pipeline {
               'rpmkeys',
               'rpmsign',
               'scp',
-              'ssh'
+              'sha256sum',
+              'ssh',
+              'tar'
             ],
             mockTarget: env.MOCK_TARGET_NAME
           )
@@ -117,19 +122,22 @@ pipeline {
       }
     }
 
-    stage('Build source RPM') {
+    stage('Prepare source and vendor dependencies') {
       steps {
         sh(
           script: '''
             set -euo pipefail
-            source_archive="work/rpmbuild/SOURCES/cloudflared-$VERSION.tar.gz"
-            rm -f -- "$source_archive"
-            curl --fail --location --retry 3 --retry-delay 2 \
-              --output "$source_archive" \
-              "https://github.com/cloudflare/cloudflared/archive/refs/tags/$VERSION.tar.gz"
+            # This stage runs on the networked Jenkins node, NOT in Mock.
+            work/rpmbuild/SOURCES/prep-cloudflared.sh "$VERSION"
+            test -s "work/rpmbuild/SOURCES/cloudflared-$VERSION.tar.gz"
+            test -s "work/rpmbuild/SOURCES/cloudflared-$VERSION-vendor.tar.gz"
           '''
         )
+      }
+    }
 
+    stage('Build source RPM') {
+      steps {
         script {
           rpm.updateSpec(
             specFile: 'work/rpmbuild/SPECS/cloudflared.spec',
@@ -253,7 +261,7 @@ pipeline {
         String version = (env.VERSION ?: params.VERSION ?: 'unknown').trim()
         String releasever = (env.RELEASEVER ?: '10').trim()
         String basearch = (env.BASEARCH ?: 'x86_64').trim()
-        String mockTarget = (env.MOCK_TARGET_NAME ?: 'alma+epel-10-x86_64').trim()
+        String mockTarget = (env.MOCK_TARGET_NAME ?: 'alma+epel+go-10-x86_64').trim()
 
         Map<String, String> slackCredentialIds = [
           webhookCredentialsId: (env.SLACK_WEBHOOK_CREDENTIALS_ID ?: '').trim(),
